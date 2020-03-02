@@ -39,13 +39,11 @@ class MainActivity : AppCompatActivity() {
             if (adapter.data.size>0){
                 adapter.remove(0)
             }
-//            layoutManager.setAdjustableItemType(1)
         }
         btn_del2.setOnClickListener {
             if(adapter.data.size>0){
                 adapter.remove(adapter.data.size-1)
             }
-//            layoutManager.setAdjustableItemType(2)
         }
     }
 }
