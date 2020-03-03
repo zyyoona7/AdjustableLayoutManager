@@ -254,10 +254,21 @@ public class AdjustableLayoutManager extends LinearLayoutManager {
         if (size <= 0) {
             return;
         }
+        RecyclerView.LayoutParams layoutParams = (RecyclerView.LayoutParams) view.getLayoutParams();
+        boolean lpChanged = false;
         if (mOrientation == RecyclerView.VERTICAL) {
-            view.getLayoutParams().height = size;
+            if (layoutParams.height != size) {
+                lpChanged = true;
+                layoutParams.height = size;
+            }
         } else {
-            view.getLayoutParams().width = size;
+            if (layoutParams.width != size) {
+                lpChanged = true;
+                layoutParams.width = size;
+            }
+        }
+        if (lpChanged) {
+            view.setLayoutParams(layoutParams);
         }
     }
 
