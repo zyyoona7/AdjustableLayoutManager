@@ -5,8 +5,6 @@ import android.util.AttributeSet;
 import android.util.Log;
 import android.view.View;
 
-import static androidx.recyclerview.widget.RecyclerView.NO_POSITION;
-
 /**
  * 可以指定 itemType 宽/高 可以根据其他 item 宽/高动态伸缩，
  * 如果当前所有 item 没有铺满 RecyclerView 则会使 {@link #adjustableItemType} 的 item 铺满剩余空间
@@ -16,17 +14,18 @@ public class AdjustableLayoutManager extends LinearLayoutManager {
 
     private static final String TAG = "AdjustableLayoutManager";
 
+    private static final int DEFAULT_ADJUSTABLE_COUNT = 12;
     private static final int NO_ITEM_TYPE = -11221;
-    private static final int MIN_SIZE_NO_ITEM_TYPE = -2;
+    private static final int NO_MIN_SIZE = -1;
 
     /**
      * 根据其他 item 调整的 itemType（主角 itemType）
      */
     private int adjustableItemType = NO_ITEM_TYPE;
     /**
-     * 根据其他 item 调整的 itemType 的下标，优化测量
+     * 上一次调整的 itemType
      */
-    private int adjustableItemPosition = NO_POSITION;
+    private int oldAdjustableItemType = NO_ITEM_TYPE;
     /**
      * 最小伸缩尺寸
      */
@@ -40,11 +39,33 @@ public class AdjustableLayoutManager extends LinearLayoutManager {
      */
     private int minSize = minAdjustableItemSize;
     /**
+     * 触发拉伸测量的 itemCount，如果当前 itemCount > maxAdjustableItemCount 则不会触发逐个测量
+     */
+    private int maxAdjustableItemCount = DEFAULT_ADJUSTABLE_COUNT;
+
+    /*
+      -------- 以下属性为了不满足条件时还原宽/高 --------
+     */
+    /**
+     * 原可调控 item 真实大小
+     */
+    private int realOldAdjustableItemSize = 0;
+    /**
+     * 当前 itemType 真实大小
+     */
+    private int realAdjustableItemSize = 0;
+    /**
      * 可调控 item 自身大小
      */
     private int adjustableItemSize = 0;
+    /*
+      -------- 以上属性为了不满足条件时还原宽/高 --------
+     */
+    /**
+     * 当 itemCount 不满足调整大小时是否重置已经改变的 item 大小
+     */
+    private boolean isResizeWhenItemCountDisallow = false;
 
-    private boolean isNeedResize = false;
 
     public AdjustableLayoutManager(Context context) {
         super(context);
@@ -60,27 +81,15 @@ public class AdjustableLayoutManager extends LinearLayoutManager {
 
     @Override
     public void onLayoutChildren(RecyclerView.Recycler recycler, RecyclerView.State state) {
+        minSize = adjustableItemType != NO_ITEM_TYPE ?
+                getAdjustableItemMinSize(recycler, state) : NO_MIN_SIZE;
         super.onLayoutChildren(recycler, state);
-        if (getChildCount() == state.getItemCount() && adjustableItemType != NO_ITEM_TYPE) {
-            if (adjustableItemPosition != NO_POSITION && !isAdjustablePosition()) {
-                //如果设置了可调整itemType的下标，并且当前下标不是可调整类型直接返回
-                return;
-            }
-            minSize = getAdjustableItemMinSize(state);
-            if (minSize == MIN_SIZE_NO_ITEM_TYPE) {
-                return;
-            }
-            isNeedResize = true;
-            super.onLayoutChildren(recycler, state);
-            isNeedResize = false;
+        if (adjustableItemType != NO_ITEM_TYPE
+                && !isAllowItemCount(state) && isResizeWhenItemCountDisallow) {
+            oldAdjustableItemType = NO_ITEM_TYPE;
+            realOldAdjustableItemSize = 0;
+            realAdjustableItemSize = 0;
         }
-    }
-
-    private boolean isAdjustablePosition() {
-        if (adjustableItemPosition < getChildCount() && adjustableItemPosition >= 0) {
-            return isAdjustableItem(getChildAt(adjustableItemPosition));
-        }
-        return false;
     }
 
     /**
@@ -121,7 +130,7 @@ public class AdjustableLayoutManager extends LinearLayoutManager {
         }
 
         //根据条件调整 view 的大小
-        adjustViewSize(view);
+        adjustViewSize(state, view);
 
         measureChildWithMargins(view, 0, 0);
         result.mConsumed = mOrientationHelper.getDecoratedMeasurement(view);
@@ -171,20 +180,27 @@ public class AdjustableLayoutManager extends LinearLayoutManager {
     /**
      * 调整 View 的大小
      *
-     * @param view child view
+     * @param state state
+     * @param view  child view
      */
-    private void adjustViewSize(View view) {
-        if (!isNeedResize) {
-            if (isAdjustableItem(view)) {
-                setViewSize(view, getMinItemSize(view));
+    private void adjustViewSize(RecyclerView.State state, View view) {
+        if (isAllowItemCount(state)) {
+            if (isOldAdjustableItem(view)) {
+                setViewSize(view, realOldAdjustableItemSize);
             }
-            return;
-        }
-        if (isAdjustableItem(view)) {
-            if (minSize > 0) {
-                setViewSize(view, minSize);
-            } else {
-                setViewSize(view, adjustableItemSize);
+            if (isAdjustableItem(view)) {
+                if (minSize > 0) {
+                    setViewSize(view, minSize);
+                } else {
+                    setViewSize(view, adjustableItemSize);
+                }
+            }
+        } else if (isResizeWhenItemCountDisallow) {
+            if (isOldAdjustableItem(view)) {
+                setViewSize(view, realOldAdjustableItemSize);
+            }
+            if (isAdjustableItem(view)) {
+                setViewSize(view, realAdjustableItemSize);
             }
         }
     }
@@ -192,20 +208,26 @@ public class AdjustableLayoutManager extends LinearLayoutManager {
     /**
      * 获取可调整 item 的最小宽/高
      *
-     * @param state state
+     * @param recycler recycler
+     * @param state    state
      * @return 可调整 item 的最小宽/高
      */
-    private int getAdjustableItemMinSize(RecyclerView.State state) {
+    private int getAdjustableItemMinSize(RecyclerView.Recycler recycler, RecyclerView.State state) {
         int minSize = minAdjustableItemSize;
 
-        if (state.getItemCount() != getChildCount()) {
+        if (!isAllowItemCount(state)) {
             return minSize;
         }
         int adjustableCount = 0;
         int minUsedSize = 0;
         for (int i = 0; i < state.getItemCount(); i++) {
 
-            View childView = getChildAt(i);
+            View childView;
+            if (state.isPreLayout()) {
+                childView = findViewByPosition(i);
+            } else {
+                childView = recycler.getViewForPosition(i);
+            }
 
             if (childView == null || childView.getLayoutParams() == null) {
                 continue;
@@ -213,11 +235,22 @@ public class AdjustableLayoutManager extends LinearLayoutManager {
             //先测量一次，获取 childView 真实的尺寸
             measureChildWithMargins(childView, 0, 0);
 
+            if (isOldAdjustableItem(childView)) {
+                //因为这个是需要设置 view 大小的值，所以不使用 getDecoratedMeasuredSize()
+                realOldAdjustableItemSize = getMeasuredSize(childView);
+            }
             if (isAdjustableItem(childView)) {
                 //因为这个是需要设置 view 大小的值，所以不使用 getDecoratedMeasuredSize()
-                setViewSize(childView, getMinItemSize(childView));
-                //设置完尺寸后重新测量
-                measureChildWithMargins(childView, 0, 0);
+                realAdjustableItemSize = getMeasuredSize(childView);
+                if (minAdjustableItemSize > 0) {
+                    setViewSize(childView, minAdjustableItemSize);
+                    //设置完尺寸后重新测量
+                    measureChildWithMargins(childView, 0, 0);
+                } else if (minAdjustableItemRatio > 0) {
+                    setViewSize(childView, (int) (minAdjustableItemRatio * getMeasuredSizeForRatio(childView)));
+                    //设置完尺寸后重新测量
+                    measureChildWithMargins(childView, 0, 0);
+                }
                 adjustableItemSize = Math.max(getMeasuredSize(childView), adjustableItemSize);
                 adjustableCount++;
             }
@@ -229,19 +262,18 @@ public class AdjustableLayoutManager extends LinearLayoutManager {
         if (minUsedSize < parentSize) {
             minSize = parentSize - (minUsedSize - adjustableItemSize);
         }
-        return adjustableCount == 0 ? MIN_SIZE_NO_ITEM_TYPE :
+        return adjustableCount == 0 ? NO_MIN_SIZE :
                 (adjustableCount == 1 ? minSize : minAdjustableItemSize);
     }
 
-    private int getMinItemSize(View childView) {
-        if (minAdjustableItemSize > 0) {
-            return minAdjustableItemSize;
-        } else {
-            if (minAdjustableItemRatio <= 0) {
-                minAdjustableItemRatio = 1f;
-            }
-            return (int) (minAdjustableItemRatio * getMeasuredSizeForRatio(childView));
-        }
+    /**
+     * itemCount 是否在测量范围内
+     *
+     * @param state state
+     * @return itemCount 是否在测量范围内
+     */
+    private boolean isAllowItemCount(RecyclerView.State state) {
+        return state.getItemCount() <= maxAdjustableItemCount;
     }
 
     /**
@@ -254,21 +286,10 @@ public class AdjustableLayoutManager extends LinearLayoutManager {
         if (size <= 0) {
             return;
         }
-        RecyclerView.LayoutParams layoutParams = (RecyclerView.LayoutParams) view.getLayoutParams();
-        boolean lpChanged = false;
         if (mOrientation == RecyclerView.VERTICAL) {
-            if (layoutParams.height != size) {
-                lpChanged = true;
-                layoutParams.height = size;
-            }
+            view.getLayoutParams().height = size;
         } else {
-            if (layoutParams.width != size) {
-                lpChanged = true;
-                layoutParams.width = size;
-            }
-        }
-        if (lpChanged) {
-            view.setLayoutParams(layoutParams);
+            view.getLayoutParams().width = size;
         }
     }
 
@@ -305,6 +326,17 @@ public class AdjustableLayoutManager extends LinearLayoutManager {
     }
 
     /**
+     * 当前 View 是否是上一次可调整尺寸类型
+     *
+     * @param childView child view
+     * @return 是否是上一次可调整尺寸类型
+     */
+    private boolean isOldAdjustableItem(View childView) {
+        RecyclerView.ViewHolder viewHolder = mRecyclerView.getChildViewHolder(childView);
+        return viewHolder != null && oldAdjustableItemType == viewHolder.getItemViewType();
+    }
+
+    /**
      * 当前 View 是否是可调整尺寸类型
      *
      * @param childView child view
@@ -324,6 +356,7 @@ public class AdjustableLayoutManager extends LinearLayoutManager {
         if (adjustableItemType == this.adjustableItemType) {
             return;
         }
+        this.oldAdjustableItemType = this.adjustableItemType;
         this.adjustableItemType = adjustableItemType;
         requestLayout();
     }
@@ -355,11 +388,28 @@ public class AdjustableLayoutManager extends LinearLayoutManager {
     }
 
     /**
-     * 设置可调整尺寸 item 所在的下标
+     * 设置计算可调整 itemCount ，超过此数量不会触发额外的测量操作
      *
-     * @param adjustableItemPosition 下标
+     * @param maxAdjustableItemCount itemCount
      */
-    public void setAdjustableItemPosition(int adjustableItemPosition) {
-        this.adjustableItemPosition = adjustableItemPosition;
+    public void setMaxAdjustableItemCount(int maxAdjustableItemCount) {
+        if (maxAdjustableItemCount == this.maxAdjustableItemCount) {
+            return;
+        }
+        this.maxAdjustableItemCount = maxAdjustableItemCount;
+        requestLayout();
+    }
+
+    /**
+     * 如果 adapter 的 itemCount 超过 {@link #maxAdjustableItemCount}
+     * 并且 {@link #isResizeWhenItemCountDisallow} 为 true 则会恢复 View 的大小
+     *
+     * @param resizeWhenItemCountDisallow itemCound 超过 {@link #maxAdjustableItemCount} 是否重置 view 大小
+     */
+    public void setResizeWhenItemCountDisallow(boolean resizeWhenItemCountDisallow) {
+        if (resizeWhenItemCountDisallow == this.isResizeWhenItemCountDisallow) {
+            return;
+        }
+        isResizeWhenItemCountDisallow = resizeWhenItemCountDisallow;
     }
 }

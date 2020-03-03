@@ -10,8 +10,8 @@ android {
     defaultConfig {
         minSdkVersion 16
         targetSdkVersion 29
-        versionCode 3
-        versionName "1.0.2"
+        versionCode 4
+        versionName "1.0.3"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles 'consumer-rules.pro'
@@ -41,7 +41,7 @@ publish {
     //项目名称 project name
     artifactId = 'adjustablelayoutmanager'
     //版本号 version code
-    publishVersion = '1.0.2'
+    publishVersion = '1.0.3'
     //项目描述 description
     desc = 'adjustablelayoutmanager'
     //项目网址链接 link

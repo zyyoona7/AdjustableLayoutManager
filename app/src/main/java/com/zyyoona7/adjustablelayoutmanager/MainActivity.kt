@@ -36,13 +36,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         btn_del1.setOnClickListener {
-            if (adapter.data.size>0){
-                adapter.remove(0)
+            if (adapter.data.size>1){
+                adapter.remove(1)
             }
         }
         btn_del2.setOnClickListener {
-            if(adapter.data.size>0){
-                adapter.remove(adapter.data.size-1)
+            if(adapter.data.size>1){
+                adapter.remove(adapter.data.size-2)
             }
         }
     }
